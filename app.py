@@ -5,7 +5,7 @@ import tempfile
 from pathlib import Path
 
 st.set_page_config(
-    page_title="Video Masker pour Alcôve",
+    page_title="Video Masker pour Alcôve - Poudrière de Sélestat",
     page_icon="🎭",
     layout="wide"
 )
@@ -13,6 +13,12 @@ st.set_page_config(
 st.title("🎭 Video Masker & Ratio Standardizer")
 st.write("Transformez vos vidéos en 16:9 avec un masque personnalisé pour projection en alcôve.")
 st.caption("🏛️ Pour la Poudrière de Sélestat")
+
+# Vérifier que le masque existe
+MASK_PATH = Path(__file__).parent / "masque.png"
+if not MASK_PATH.exists():
+    st.error(f"❌ Erreur critique: Le fichier masque.png est introuvable dans {MASK_PATH.parent}")
+    st.stop()
 
 # --- BARRE LATÉRALE : CONFIGURATION ---
 st.sidebar.header("⚙️ Paramètres de conversion")
@@ -53,45 +59,34 @@ st.sidebar.info("""
 **ℹ️ Comment ça marche ?**
 
 1. Uploadez votre vidéo (n'importe quel ratio)
-2. Uploadez un masque PNG 16:9 avec transparence
+2. Le masque de la Poudrière sera appliqué automatiquement
 3. L'outil va:
    - Redimensionner la vidéo en 16:9
    - Ajouter des bandes noires si nécessaire
    - Appliquer le masque par-dessus
 """)
 
+# Afficher le masque utilisé
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 🎨 Masque utilisé")
+st.sidebar.image(str(MASK_PATH), caption="Masque de la Poudrière", use_column_width=True)
+
 # --- ZONE D'UPLOAD ---
-st.markdown("### 📤 Étape 1 : Chargez vos fichiers")
+st.markdown("### 📤 Étape 1 : Chargez votre vidéo")
 
-col1, col2 = st.columns(2)
+uploaded_video = st.file_uploader(
+    "Choisissez une vidéo...",
+    type=["mp4", "mov", "avi", "mkv", "webm"],
+    help="Formats supportés: MP4, MOV, AVI, MKV, WebM"
+)
 
-with col1:
-    st.markdown("#### Vidéo source")
-    uploaded_video = st.file_uploader(
-        "Choisissez une vidéo...",
-        type=["mp4", "mov", "avi", "mkv", "webm"],
-        help="Formats supportés: MP4, MOV, AVI, MKV, WebM"
-    )
-
-    if uploaded_video:
-        st.success(f"✅ Vidéo chargée: {uploaded_video.name}")
-        file_size_mb = uploaded_video.size / (1024 * 1024)
-        st.caption(f"Taille: {file_size_mb:.2f} MB")
-
-with col2:
-    st.markdown("#### Masque PNG")
-    uploaded_mask = st.file_uploader(
-        "Choisissez votre masque PNG (16:9 avec transparence)",
-        type=["png"],
-        help="Le masque doit être en 16:9 avec canal alpha (transparence)"
-    )
-
-    if uploaded_mask:
-        st.success(f"✅ Masque chargé: {uploaded_mask.name}")
-        st.image(uploaded_mask, caption="Aperçu du masque", use_container_width=True)
+if uploaded_video:
+    st.success(f"✅ Vidéo chargée: {uploaded_video.name}")
+    file_size_mb = uploaded_video.size / (1024 * 1024)
+    st.caption(f"Taille: {file_size_mb:.2f} MB")
 
 # --- TRAITEMENT ---
-if uploaded_video and uploaded_mask:
+if uploaded_video:
     st.markdown("---")
     st.markdown("### 🎬 Étape 2 : Lancer le traitement")
 
@@ -117,34 +112,36 @@ if uploaded_video and uploaded_mask:
                 t_video.write(uploaded_video.read())
                 t_video_path = t_video.name
 
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as t_mask:
-                t_mask.write(uploaded_mask.read())
-                t_mask_path = t_mask.name
-
             progress_bar.progress(20)
 
             # Nom du fichier de sortie
             output_filename = "video_masquee_16-9.mp4"
 
-            # Construction de la commande FFmpeg
+            # Construction de la commande FFmpeg CORRIGÉE
             status_text.text("🎨 Application du masque et conversion du ratio...")
             progress_bar.progress(30)
 
-            # Commande FFmpeg optimisée
-            # [0:v] gère le redimensionnement et le padding (bandes noires si pas 16:9)
-            # [1:v] applique le masque par dessus
+            # Commande FFmpeg optimisée avec redimensionnement du masque
+            # [0:v] = vidéo source
+            # [1:v] = masque.png
             cmd = [
                 'ffmpeg', '-y',
                 '-i', t_video_path,
-                '-i', t_mask_path,
+                '-i', str(MASK_PATH),
                 '-filter_complex',
-                f"[0:v]scale={target_res}:force_original_aspect_ratio=decrease,pad={target_res}:(ow-iw)/2:(oh-ih)/2[bg];"
-                "[bg][1:v]overlay=0:0[out]",
+                # Étape 1: Redimensionner la vidéo en conservant le ratio, puis ajouter padding pour 16:9
+                f"[0:v]scale={target_res}:force_original_aspect_ratio=decrease,"
+                f"pad={target_res}:(ow-iw)/2:(oh-ih)/2:color=black[video_bg];"
+                # Étape 2: Redimensionner le masque à la résolution de sortie
+                f"[1:v]scale={target_res}:force_original_aspect_ratio=decrease[mask_resized];"
+                # Étape 3: Superposer le masque redimensionné sur la vidéo
+                "[video_bg][mask_resized]overlay=(W-w)/2:(H-h)/2[out]",
                 '-map', '[out]',
                 '-map', '0:a?',  # Copie l'audio si présent
                 '-c:v', 'libx264',
                 '-crf', str(crf_value),
                 '-preset', preset_value,
+                '-pix_fmt', 'yuv420p',  # Assurer la compatibilité
                 '-c:a', 'aac',  # Codec audio
                 '-b:a', '192k',  # Bitrate audio
                 output_filename
@@ -153,13 +150,14 @@ if uploaded_video and uploaded_mask:
             progress_bar.progress(40)
 
             # Exécution de FFmpeg
-            with st.spinner("⏳ FFmpeg traite la vidéo... Cela peut prendre quelques minutes selon la taille."):
-                process = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    check=True
-                )
+            status_text.text("⏳ FFmpeg traite la vidéo... Cela peut prendre quelques minutes.")
+
+            process = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True
+            )
 
             progress_bar.progress(90)
             status_text.text("✨ Finalisation...")
@@ -190,7 +188,7 @@ if uploaded_video and uploaded_mask:
                     st.download_button(
                         label="⬇️ Télécharger la vidéo finale",
                         data=file,
-                        file_name=f"video_alcove_{Path(uploaded_video.name).stem}.mp4",
+                        file_name=f"poudriere_{Path(uploaded_video.name).stem}.mp4",
                         mime="video/mp4",
                         use_container_width=True,
                         type="primary"
@@ -203,7 +201,6 @@ if uploaded_video and uploaded_mask:
             # Nettoyage des fichiers temporaires
             try:
                 os.remove(t_video_path)
-                os.remove(t_mask_path)
             except:
                 pass
 
@@ -211,25 +208,28 @@ if uploaded_video and uploaded_mask:
             progress_bar.empty()
             status_text.empty()
             st.error("❌ Erreur lors du traitement FFmpeg")
-            with st.expander("Voir les détails de l'erreur"):
+
+            with st.expander("🔍 Voir les détails de l'erreur"):
                 st.code(e.stderr)
+                st.markdown("**Commande exécutée:**")
+                st.code(" ".join(cmd))
 
         except Exception as e:
             progress_bar.empty()
             status_text.empty()
             st.error(f"❌ Erreur inattendue: {str(e)}")
 
-elif uploaded_video and not uploaded_mask:
-    st.warning("⚠️ Veuillez également charger un masque PNG pour continuer.")
-elif uploaded_mask and not uploaded_video:
-    st.warning("⚠️ Veuillez également charger une vidéo pour continuer.")
+            with st.expander("🔍 Détails techniques"):
+                import traceback
+                st.code(traceback.format_exc())
+
 else:
-    st.info("👆 Commencez par charger une vidéo et un masque PNG ci-dessus.")
+    st.info("👆 Commencez par charger une vidéo ci-dessus.")
 
 # --- FOOTER ---
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666;'>
-    <p>🎭 Video Masker pour projections en alcôve | Propulsé par FFmpeg et Streamlit</p>
+    <p>🎭 Video Masker pour la Poudrière de Sélestat | Propulsé par FFmpeg et Streamlit</p>
 </div>
 """, unsafe_allow_html=True)
