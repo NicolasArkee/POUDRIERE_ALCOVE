@@ -10,7 +10,7 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🎭 Video Masker & Ratio Standardizer")
+st.title("🎭 Video Masker pour la Poudrière - Selestat")
 st.write("Transformez vos vidéos en 16:9 avec un masque personnalisé pour projection en alcôve.")
 st.caption("🏛️ Pour la Poudrière de Sélestat")
 
