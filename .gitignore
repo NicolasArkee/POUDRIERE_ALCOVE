@@ -34,6 +34,9 @@ wheels/
 *.webm
 video_masquee_16-9.mp4
 
+# Backups
+*_old.png
+
 # OS
 .DS_Store
 Thumbs.db
